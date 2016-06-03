@@ -31,8 +31,6 @@ namespace go {
 		if (ng == 0)
 			return false;
 		else {
-			p->gqueue.lock.lock();
-			p2->gqueue.lock.lock();
 			ng = p2->gqueue.gqueue.size();
 			if (ng == 0)
 				return false;
@@ -40,8 +38,6 @@ namespace go {
 			{
 				p->gqueue.push(p2->gqueue.get());
 			}
-			p2->gqueue.lock.unlock();
-			p->gqueue.lock.unlock();
 		}
 		debugPrint("steal success");
 		return true;

@@ -60,8 +60,8 @@ namespace go {
 			lock.lock();
 			auto ret = gqueue.front();
 			gqueue.pop();
-			return ret;
 			lock.unlock();
+			return ret;
 		}
 	};
 
