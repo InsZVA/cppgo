@@ -22,5 +22,5 @@ int main() {
 		g->args = new std::map<std::string, void*>();
 		go::gocommit(g);
 	}
-	while (1);
+	while (i < 299);
 }

@@ -8,6 +8,7 @@
 #include <iostream>
 #include <mutex>
 #include <condition_variable>
+#include <map>
 
 namespace go {
 
@@ -62,6 +63,27 @@ namespace go {
 			gqueue.pop();
 			lock.unlock();
 			return ret;
+		}
+	};
+
+	template <class S, class T> struct Map {
+		std::map<S, T> map;
+		RWMutex mutex;
+		void set(S s, T t) {
+			mutex.wLock();
+			map[s] = t;
+			mutex.wUnlock();
+		}
+		T get(S s) {
+			mutex.rLock();
+			auto ret = map[s];
+			mutex.rUnLock();
+			return ret;
+		}
+		void remove(S s) {
+			mutex.wLock();
+			map.erase(s);
+			mutex.wUnlock();
 		}
 	};
 

@@ -1,9 +1,12 @@
 #include "go.h"
-
+#define DEBUG
 namespace go {
 	volatile unsigned int nmspinning = 0;
 	RWMutex nmspinning_lock;
 	const unsigned int MAX_PROCS = 8;
+
+	Map<std::thread::id, M*> mmap;
+	std::mutex mmap_lock;
 
 	Queue<P*> gfpqueue;
 
@@ -11,7 +14,9 @@ namespace go {
 	std::mutex gplist_lock;
 
 	template <class T> void debugPrint(T t) {
+#ifdef DEBUG	//Because the empty function will be optimized by compiler
 		std::cout << t << std::endl;
+#endif
 	}
 
 	void addnmspinning() {
@@ -44,6 +49,10 @@ namespace go {
 	}
 
 	void spin(M* m) {
+		mmap_lock.lock();
+		mmap.set(std::this_thread::get_id(), m);
+		mmap_lock.unlock();
+
 		debugPrint("spinning...");
 		addnmspinning();
 		nmspinning_lock.rLock();
@@ -69,7 +78,8 @@ namespace go {
 				if (nfp == 0) {
 					debugPrint("a m go park");
 					delete m;
-					return;
+					mmap.remove(std::this_thread::get_id());
+					break;
 				}
 				else {
 					auto p = gfpqueue.get();
@@ -86,10 +96,18 @@ namespace go {
 						continue;
 					}
 					else {
+						for (int j = 0;j < gplist.size();j++) {
+							i = (i + 1) % gplist.size();
+							if (steal(m->p, gplist[i])) {
+								continue;
+							}
+						}
+						
 						gfpqueue.push(m->p);
 						debugPrint("p steal faild and go free");
 						m->p = nullptr;
 						delete m;
+						mmap.remove(std::this_thread::get_id());
 						debugPrint("a m go park");
 						break;
 					}
@@ -120,8 +138,16 @@ namespace go {
 			debugPrint("a p go to gfpqueue");
 		}
 		else {
-			auto i = rand() % np;
-			gplist[i]->gqueue.push(g);
+			auto m = mmap.get(std::this_thread::get_id());
+			P* p;
+			if (m == nullptr) {	//Main thread
+				auto i = rand() % np;
+				p = gplist[i];
+			}
+			else {
+				p = m->p;
+			}
+			p->gqueue.push(g);
 		}
 		np = gplist.size();
 		if (np < MAX_PROCS && nmspinning == 1) {
