@@ -1,16 +1,18 @@
 #include "go.h"
-#define DEBUG
+
 namespace go {
 	volatile unsigned int nmspinning = 0;
 	RWMutex nmspinning_lock;
 	const unsigned int MAX_PROCS = 8;
-
-	Map<std::thread::id, M*> mmap;
-	std::mutex mmap_lock;
+	unsigned newP = 0;
+	unsigned newM = 0;
 
 	Queue<P*> gfpqueue;
+	Queue<std::thread*> tqueue;
 
 	std::vector<P*> gplist;
+	//std::mutex gplist_mutex;
+	//std::unique_lock<std::mutex> gplist_lock(gplist_mutex);
 	std::mutex gplist_lock;
 
 	template <class T> void debugPrint(T t) {
@@ -32,11 +34,11 @@ namespace go {
 	}
 
 	bool steal(P* p, P* p2) {
-		auto ng = p2->gqueue.gqueue.size();
+		auto ng = p2->gqueue.queue.size();
 		if (ng == 0)
 			return false;
 		else {
-			ng = p2->gqueue.gqueue.size();
+			ng = p2->gqueue.queue.size();
 			if (ng == 0)
 				return false;
 			for (unsigned i = 0;i <= ng / 2;i++)
@@ -49,9 +51,6 @@ namespace go {
 	}
 
 	void spin(M* m) {
-		mmap_lock.lock();
-		mmap.set(std::this_thread::get_id(), m);
-		mmap_lock.unlock();
 
 		debugPrint("spinning...");
 		addnmspinning();
@@ -65,6 +64,7 @@ namespace go {
 		minusnmspinning();
 		debugPrint("a m spin -> nonspin");
 		while (1) {
+			start_while:
 			if (m->g != nullptr) {
 				debugPrint("working...");
 				m->g->func(*(m->g->args));
@@ -74,24 +74,31 @@ namespace go {
 			}
 			if (m->p == nullptr) {
 				debugPrint("find a new p to m");
-				auto nfp = gfpqueue.gqueue.size();
+				auto nfp = gfpqueue.queue.size();
 				if (nfp == 0) {
 					debugPrint("a m go park");
 					delete m;
-					mmap.remove(std::this_thread::get_id());
 					break;
 				}
 				else {
 					auto p = gfpqueue.get();
 					m->p = p;
+					p->free = false;
 					continue;
 				}
 			}
 			if (m->g == nullptr) {
 				debugPrint("find a new g to m");
-				auto ng = m->p->gqueue.gqueue.size();
+				auto ng = m->p->gqueue.queue.size();
 				if (ng == 0) {
-					auto i = rand() % gplist.size();
+					auto np = gplist.size();
+					if (np == 0) {
+						m->p = nullptr;
+						delete m;
+						debugPrint("a m go park");
+						break;
+					};
+					auto i = rand() % np;
 					if (steal(m->p, gplist[i])) {
 						continue;
 					}
@@ -99,15 +106,19 @@ namespace go {
 						for (int j = 0;j < gplist.size();j++) {
 							i = (i + 1) % gplist.size();
 							if (steal(m->p, gplist[i])) {
-								continue;
+								goto start_while;
 							}
 						}
 						
-						gfpqueue.push(m->p);
+						//gfpqueue.push(m->p);
+						gfpqueue.lock.lock();
+						gfpqueue.queue.push(m->p);
+						m->p->free = true;
+						gfpqueue.lock.unlock();
+
 						debugPrint("p steal faild and go free");
 						m->p = nullptr;
 						delete m;
-						mmap.remove(std::this_thread::get_id());
 						debugPrint("a m go park");
 						break;
 					}
@@ -129,6 +140,7 @@ namespace go {
 		P* p = nullptr;
 		if (np == 0) {
 			p = new P;
+			newP++;
 			debugPrint("new p");
 			gplist_lock.lock();
 			gplist.push_back(p);
@@ -138,25 +150,25 @@ namespace go {
 			debugPrint("a p go to gfpqueue");
 		}
 		else {
-			auto m = mmap.get(std::this_thread::get_id());
-			P* p;
-			if (m == nullptr) {	//Main thread
-				auto i = rand() % np;
-				p = gplist[i];
-			}
-			else {
-				p = m->p;
-			}
-			p->gqueue.push(g);
+			//TODO find a runnable p
+			auto np = gplist.size();
+			auto i = rand() % np;
+			while (gplist[i]->free)
+				i = (i + 1) % gplist.size();
+			gplist[i]->gqueue.queue.push(g);
 		}
 		np = gplist.size();
 		if (np < MAX_PROCS && nmspinning == 1) {
 			auto m = new M;
+			newM++;
 			debugPrint("new m");
-			if (p == nullptr)
+			if (p == nullptr) {
 				m->p = new P;
-			else if (gfpqueue.gqueue.size() == 0) {
+				newP++;
+			}
+			else if (gfpqueue.queue.size() == 0) {
 				m->p = new P;
+				newP++;
 			}
 			else {
 				m->p = gfpqueue.get();
@@ -165,15 +177,25 @@ namespace go {
 			gplist_lock.lock();
 			gplist.push_back(m->p);
 			gplist_lock.unlock();
-			std::thread t(spin, m);
-			t.detach();
+			auto t = new std::thread (spin, m);
+			//t->detach();
+			tqueue.push(t);
 		}
 	}
 
 	void goinit() {
 		auto m = new M;
+		newM++;
 		debugPrint("new m");
-		std::thread t(spin, m);
-		t.detach();
+		auto t = new std::thread(spin, m);
+		//t->detach();
+		tqueue.push(t);
+	}
+
+	void goend() {
+		while (!tqueue.queue.empty()) {
+			auto t = tqueue.get();
+			t->join();
+		}
 	}
 }

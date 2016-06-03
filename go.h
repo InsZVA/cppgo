@@ -43,24 +43,26 @@ namespace go {
 		void wUnlock() {
 			wm.lock();
 			wr_cnt = false;
-			if (!wr_cnt)
-				cond.notify_all();
+			cond.notify_all();
 			wm.unlock();
 		}
 	};
 
 	template <class T> struct Queue {
-		std::queue<T> gqueue;
-		std::mutex lock;
+		std::queue<T> queue;
+		std::mutex mutex;
+		std::unique_lock<std::mutex> lock;
+		//std::mutex lock;
+		Queue():lock(mutex, std::defer_lock){}
 		void push(T t) {
 			lock.lock();
-			gqueue.push(t);
+			queue.push(t);
 			lock.unlock();
 		}
 		T get() {
+			auto ret = queue.front();
 			lock.lock();
-			auto ret = gqueue.front();
-			gqueue.pop();
+			queue.pop();
 			lock.unlock();
 			return ret;
 		}
@@ -85,6 +87,12 @@ namespace go {
 			map.erase(s);
 			mutex.wUnlock();
 		}
+		unsigned int size() {
+			mutex.rLock();
+			auto ret = map.size();
+			mutex.rUnLock();
+			return ret;
+		}
 	};
 
 	typedef std::map<std::string, void*> args_type;
@@ -92,12 +100,13 @@ namespace go {
 	
 
 	typedef struct _g{
-		func_type func;
-		args_type* args;
+		func_type func = nullptr;
+		args_type* args = nullptr;
 	} G;
 
 	typedef struct _p {
 		Queue<G*> gqueue;
+		bool free = false;
 	} P;
 
 	typedef struct _m {
@@ -111,4 +120,5 @@ namespace go {
 	bool steal(P* p, P* p2);
 	void minusnmspinning();
 	void addnmspinning();
+	void goend();
 }
